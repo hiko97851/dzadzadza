@@ -1,0 +1,57 @@
+# .github/workflows/pr-comment-command.yml
+name: PR command
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  run-on-pr:
+    runs-on: ubuntu-latest
+    # 1) C'est une PR (et pas une issue) + commande explicite
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/run-tests')
+    steps:
+      # 2) Vérifier les permissions du commentateur
+      - name: Check commenter permissions
+        id: perms
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          PERM=$(gh api "/repos/$REPO/collaborators/$ACTOR/permission" --jq '.permission')
+          echo "Permission de $ACTOR : $PERM"
+          case "$PERM" in
+            admin|maintain|write) echo "OK" ;;
+            *) echo "::error::$ACTOR n'a pas les droits suffisants"; exit 1 ;;
+          esac
+
+      # 3) Récupérer le SHA exact de la PR au moment de la vérification
+      - name: Get PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh api "/repos/$REPO/pulls/$PR_NUMBER" \
+            --jq '"sha=\(.head.sha)\nrepo=\(.head.repo.full_name)"' >> "$GITHUB_OUTPUT"
+
+      # 4) Checkout du fork, épinglé sur le SHA, sans credentials persistés
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pr.outputs.repo }}
+          ref: ${{ steps.pr.outputs.sha }}
+          persist-credentials: false
+
+      - name: Run tests
+        run: |
+          echo "Tests sur ${{ steps.pr.outputs.sha }}"
+          # make test, npm test, etc.
